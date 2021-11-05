@@ -24,21 +24,15 @@ Saves new Veracode SCA findings as Azure Devops Work Items.
 - CVE_Name: Optional - allows for replacing the displayed title for the CVE field - defaults to CVE
 - Veracode_Database_Link_Name: Optional - allows for replacing the displayed title for the Veracode Database Link field - defaults to Veracode Database Link
 
-## Sample call:
+## Usage:
+- Add the yml file to your project
+- Output the results of the agent-based SCA to a JSON file
+- Call the template yml file as below:
 ```
 - template : SCAFindingsToWorkItems.yml  
   parameters:
     json_file: 'sca_output.json'
     issue_type: 'Issue'
-    organization: 'rpereira0294'
-    Project_Name: 'Test%20Project'
-    Overview_Name: 'Descricao'
-    Vulnerability_Types_Name: 'Tipos de Vulnerabilidade'
-    Library_Source_Name: 'Origem da Vulnerabilidade'
-    Vulnerable_Library_Name: 'Biblioteca Vulneravel'
-    Version_Range_Name: 'Versoes Afetadas'
-    Recommended_Version_Name: 'Versao Recomendada'
-    CVSS_Score_Name: 'Pontuacao CVSS'
-    CVE_Name: 'CVE'
-    Veracode_Database_Link_Name: 'Link para o banco de dados da Veracode'
+    organization: 'ORGANIZATION NAME'
+    project_name: 'PROJECT NAME'
 ```
