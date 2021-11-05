@@ -1,1 +1,130 @@
+parameters:
+  json_file: ''
+  issue_type: ''
+  organization: ''
+  project_name: ''
+  Overview_Name: 'Overview'
+  Vulnerability_Types_Name: 'Vulnerability Types'
+  Library_Source_Name: 'Library Source'
+  Vulnerable_Library_Name: 'Vulnerable Library'
+  Version_Range_Name: 'Version Range'
+  Recommended_Version_Name: 'Recommended Version'
+  CVSS_Score_Name: 'CVSS Score'
+  CVE_Name: 'CVE'
+  Veracode_Database_Link_Name: 'Veracode Database Link'
+  
+steps:
+- task: PowerShell@2
+  name: ReadJsonFile
+  inputs:
+    targetType: 'inline'
+    script: |
+      $SCA_JSON = Get-Content ${{ parameters.json_file }}
+      $SCA_JSON = $SCA_JSON | ConvertFrom-Json
+      $SCA_JSON = $SCA_JSON.records.vulnerabilities
+      $SCA_JSON = $SCA_JSON | ConvertTo-Json -Depth 10 -Compress
+      $SCA_JSON = $SCA_JSON.Replace("'", "")
+      Write-Host "##vso[task.setvariable variable=VULNERABILITIES_AS_JSON;isOutput=true]$SCA_JSON"
+      
+- task: CmdLine@2
+  name: CreateTickets
+  env:
+    API_CREDENTIALS: $(AZURE_API_CREDENTIALS)
+    VULNERABILITIES_AS_JSON:  $(ReadJsonFile.VULNERABILITIES_AS_JSON)
+  inputs:
+    script: |      
+      createApiUrl="https://dev.azure.com/${{ parameters.organization }}/${{ parameters.project_name }}/_apis/wit/workitems/"'$'"${{ parameters.issue_type }}?api-version=6.0"
+      getWorkItemApiUrl="https://dev.azure.com/${{ parameters.organization }}/${{ parameters.project_name }}/_apis/wit/wiql?api-version=6.1-preview.2"
+      Authentication="anything:$API_CREDENTIALS"
+      
+      sca_json="$VULNERABILITIES_AS_JSON"
+      for encodedVulnerability in $(echo "${sca_json}" | jq -r '.[] | @base64'); do
+        vulnerabilityAsJson=$(echo "$encodedVulnerability" | base64 --decode)
+        
+        title=$( jq -r  '.title' <<< "${vulnerabilityAsJson}" ) 
+        overview=$( jq -r '.overview' <<< "${vulnerabilityAsJson}" ) 
+        overview=$( tr "\\\"" "'"<<< "${overview}" )
+        echo $overview
+        cve=$( jq -c  '.cve' <<< "${vulnerabilityAsJson}" )         
+        
+        if [[ $cve == "null" ]]; then 
+          cveContent="none"
+        else
+          cveWithoutQuotes=$( tr -d '"' <<< $cve ) 
+          cveLink="https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-$cveWithoutQuotes"
+          cveLink='\"'"$cveLink"'\"'
+          cveContent="<a href=$cveLink>$cveWithoutQuotes</a>"
+        fi
+        
+        vulnerabilityTypes=$( jq -c '.vulnerabilityTypes[]' <<< "${vulnerabilityAsJson}" )
+        vulnerabilityTypes=$( tr -d '"' <<< $vulnerabilityTypes ) 
+        vulnerabilityTypesAsString=""
+        if [[ $vulnerabilityTypes == "" ]]; then 
+          vulnerabilityTypesAsString=""
+        else
+          for vulnerabilityType in $vulnerabilityTypes; do
+            vulnerabilityTypesAsString="$vulnerabilityTypesAsString, $vulnerabilityType"
+          done
+          vulnerabilityTypesAsString=${vulnerabilityTypesAsString:2}   
+        fi
+        
+        cveWithoutQuotes=$( tr -d '"' <<< "$cve")
+        versionRange=$( jq -c  '.libraries[0].details[0].versionRange' <<< "${vulnerabilityAsJson}" )
+        versionRange=$( tr -d '"' <<< $versionRange )
+        updateToVersion=$( jq -c  '.libraries[0].details[0].updateToVersion' <<< "${vulnerabilityAsJson}" )
+        updateToVersion=$( tr -d '"' <<< $updateToVersion )
+        
+        if [[ $updateToVersion == "" ]]; then 
+          updateToVersion="none"
+        fi
+        if [[ $updateToVersion == "null" ]]; then 
+          updateToVersion="none"
+        fi
+        
+        link=$( jq -c  '._links.html' <<< "${vulnerabilityAsJson}" )
+        vulnerabilityLink=$( tr -d '"' <<< $link )
+        databaseApiLink="https://api.sourceclear.com/artifacts/components/${vulnerabilityLink##*/}"
+        vulnerabilityLink='\"'"$vulnerabilityLink"'\"'
+        
+        databaseApiResult=$( curl --silent $databaseApiLink )
+        coordOne=$( jq -c  '.artifactComponents[0].coordOne' <<< "${databaseApiResult}" )
+        coordTwo=$( jq -c  '.artifactComponents[0].coordTwo' <<< "${databaseApiResult}" )
+        libraryName=$coordOne.$coordTwo
+        libraryName=$( tr -d '"' <<< $libraryName )
+        librarySource=$( jq -c  '.artifactComponents[0].componentCoordinateType' <<< "${databaseApiResult}" )
+        librarySource=$( tr -d '"' <<< $librarySource )
+        
+        cvssScore=$( jq -c '.cvssScore' <<< "${vulnerabilityAsJson}" ) 
+       
+        ticketTitle="Veracode SCA - $title - $libraryName"     
+        
+        getWorkItemQuery="{\"query\": \"Select [System.Title] From WorkItems Where [System.WorkItemType] = '${{ parameters.issue_type }}' AND [State] <> 'Closed' AND [State] <> 'Removed' AND [System.Title] = '$ticketTitle'\"}"
+        workItemQueryResult=$(curl --silent -X POST -H 'Content-Type: application/json' -u "$Authentication" -d "$getWorkItemQuery" $getWorkItemApiUrl)
+        existingWorkItems=$( jq -c  '.workItems' <<< "${workItemQueryResult}" )
+        
+        if [[ "$existingWorkItems" = "" ||  "$existingWorkItems" = "[]" ]];  then
+          description=$( tr '"' '\"' <<< "<ul><li>${{ parameters.Overview_Name }}: $overview</li><li>${{ parameters.Library_Source_Name }}: $librarySource</li><li>${{ parameters.Vulnerable_Library_Name }}: $libraryName</li><li>${{ parameters.Version_Range_Name }}: $versionRange</li><li>${{ parameters.Recommended_Version_Name }}: $updateToVersion</li><li>${{ parameters.CVSS_Score_Name }}: $cvssScore</li><li>${{ parameters.CVE_Name }}: $cveContent</li><li>${{ parameters.Vulnerability_Types_Name }}: $vulnerabilityTypesAsString</li><li><a href=$vulnerabilityLink>${{ parameters.Veracode_Database_Link_Name }}</a></li></ul>" )
+          Body='[{
+            "op": "add",
+            "path": "/fields/System.Title",
+            "value": "'"$ticketTitle"'"
+          },
+          {
+            "op": "add",
+            "path": "/fields/System.Description",
+            "value": "'"$description"'"
+          }]'
 
+          curl --silent -X POST -H 'Content-Type: application/json-patch+json' -u "$Authentication" -d "$Body" $createApiUrl
+
+          echo Ticket created.
+          echo Title: $ticketTitle
+          echo Description: $description
+        else
+          echo Duplicate work item found for title $ticketTitle
+        fi
+        
+        
+        echo --------------------------
+        echo ""
+      done
