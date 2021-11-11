@@ -14,6 +14,8 @@ Saves new Veracode SCA findings as Azure Devops Work Items.
 - issue_type: the type of Work Item to be created
 - organization: the name of your Azure Devops organization (used to create the URL to call the api)
 - project_name: the name of your Azure Devops project (used to create the URL to call the api)
+- Ticket_Title_Prefix: a prefix added to all Work Items created - defaults to 'Veracode SCA - '
+- Azure_Base_Directory: defines the azure server URL (include the full url up to the path - check default value for example). Used to set up the plugin on a self-hosted instance - defaults to 'https://dev.azure.com'
 - Overview_Name: Optional - allows for replacing the displayed value inside the created tickets for the Overview field - defaults to Overview
 - Vulnerability_Types_Name: Optional - allows for replacing the displayed title for the Vulnerability Types field - defaults to Vulnerability Types
 - Library_Source_Name: Optional - allows for replacing the displayed title for the Library Source field - defaults to Library Source
