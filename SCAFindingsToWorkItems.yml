@@ -36,7 +36,9 @@ steps:
       Write-Host "##vso[task.setvariable variable=VULNERABILITIES_AS_JSON;isOutput=true]$VULNERABILITIES_JSON"
       $VULNERABLE_METHODS_JSON = $SCA_JSON.records.vulnMethods
       $VULNERABLE_METHODS_JSON = $VULNERABLE_METHODS_JSON | ConvertTo-Json -Depth 10 -Compress
-      $VULNERABLE_METHODS_JSON = $VULNERABLE_METHODS_JSON.Replace("'", "")
+      if [[ -n "$VULNERABLE_METHODS_JSON" ]]; then 
+        $VULNERABLE_METHODS_JSON = $VULNERABLE_METHODS_JSON.Replace("'", "")
+      fi
       Write-Host "##vso[task.setvariable variable=VULNERABLE_METHODS_AS_JSON;isOutput=true]$VULNERABLE_METHODS_JSON"
       
 - task: CmdLine@2
@@ -62,48 +64,50 @@ steps:
 
         declare -a VulnerableMethods
         methodIndex=0
-        for vulnerableMethod in $(echo "${VULNERABLE_METHODS_AS_JSON}" | jq -r '. | @base64'); do        
-          vulnerableMethodAsJson=$(echo "$vulnerableMethod" | base64 --decode)
+        if [[ -n "$VULNERABLE_METHODS_AS_JSON" ]]; then 
+          for vulnerableMethod in $(echo "${VULNERABLE_METHODS_AS_JSON}" | jq -r '. | @base64'); do        
+            vulnerableMethodAsJson=$(echo "$vulnerableMethod" | base64 --decode)
 
-          ref=$( jq -r  '.links[0].ref' <<< "${vulnerableMethodAsJson}")
-          ref=$( tr -d '"' <<< $ref )   
+            ref=$( jq -r  '.links[0].ref' <<< "${vulnerableMethodAsJson}")
+            ref=$( tr -d '"' <<< $ref )   
 
-          declare -a calls
-          callIndex=0
-          for callEncoded in $(echo "${vulnerableMethodAsJson}" | jq -r '.calls[] | @base64'); do
-            callAsJson=$(echo "$callEncoded" | base64 --decode)
-            calledClass=$( jq -r  '.method.className' <<< "${callAsJson}" )
-            calledMethod=$( jq -r  '.method.methodName' <<< "${callAsJson}" ) 
-            methodDescriptor=$( jq -r  '.method.descriptor' <<< "${callAsJson}" ) 
-            callChain="${{ parameters.Calls_To_Method_Name }}: <b>"$calledClass.$calledMethod$methodDescriptor":</b>"
+            declare -a calls
+            callIndex=0
+            for callEncoded in $(echo "${vulnerableMethodAsJson}" | jq -r '.calls[] | @base64'); do
+              callAsJson=$(echo "$callEncoded" | base64 --decode)
+              calledClass=$( jq -r  '.method.className' <<< "${callAsJson}" )
+              calledMethod=$( jq -r  '.method.methodName' <<< "${callAsJson}" ) 
+              methodDescriptor=$( jq -r  '.method.descriptor' <<< "${callAsJson}" ) 
+              callChain="${{ parameters.Calls_To_Method_Name }}: <b>"$calledClass.$calledMethod$methodDescriptor":</b>"
 
-            callNumber=1
-            for callChainLinklistEncoded in $(echo "${callAsJson}" | jq -r '.callChains[] | @base64'); do
-              callChainLinkListAsJson=$(echo "$callChainLinklistEncoded" | base64 --decode)
-              callChain=$callChain"</br><h5>${{ parameters.Call_Name }} "$callNumber":</h5><table>"
-              innerCallChain=""
-              for callChainLinkEncoded in $(echo "${callChainLinkListAsJson}" | jq -r '.[] | @base64'); do
-                callChainLinkAsJson=$(echo "$callChainLinkEncoded" | base64 --decode)
-                callee=$( jq -r  '.callee.className' <<< "${callChainLinkAsJson}" ).$( jq -r  '.callee.methodName' <<< "${callChainLinkAsJson}" )$( jq -r  '.callee.descriptor' <<< "${callChainLinkAsJson}" )
-                if [[ $innerCallChain == "" ]]; then 
-                  caller=$( jq -r  '.caller.className' <<< "${callChainLinkAsJson}" ).$( jq -r  '.caller.methodName' <<< "${callChainLinkAsJson}" )$( jq -r  '.caller.descriptor' <<< "${callChainLinkAsJson}" )            
-                  innerCallChain="<tr $tableBorders><td>${{ parameters.Starting_At_Name }}: </td><td $boldContent>$caller</td></tr>"
-                fi              
-                innerCallChain="$innerCallChain<tr $tableBorders><td>${{ parameters.Calling_Name }}: </td> <td $boldContent>$callee</td></tr> <tr $tableBorders><td $tableContent>${{ parameters.At_Line_Name }} "$( jq -r  '.lineNumber' <<< "${callChainLinkAsJson}" )"</td></tr>"
+              callNumber=1
+              for callChainLinklistEncoded in $(echo "${callAsJson}" | jq -r '.callChains[] | @base64'); do
+                callChainLinkListAsJson=$(echo "$callChainLinklistEncoded" | base64 --decode)
+                callChain=$callChain"</br><h5>${{ parameters.Call_Name }} "$callNumber":</h5><table>"
+                innerCallChain=""
+                for callChainLinkEncoded in $(echo "${callChainLinkListAsJson}" | jq -r '.[] | @base64'); do
+                  callChainLinkAsJson=$(echo "$callChainLinkEncoded" | base64 --decode)
+                  callee=$( jq -r  '.callee.className' <<< "${callChainLinkAsJson}" ).$( jq -r  '.callee.methodName' <<< "${callChainLinkAsJson}" )$( jq -r  '.callee.descriptor' <<< "${callChainLinkAsJson}" )
+                  if [[ $innerCallChain == "" ]]; then 
+                    caller=$( jq -r  '.caller.className' <<< "${callChainLinkAsJson}" ).$( jq -r  '.caller.methodName' <<< "${callChainLinkAsJson}" )$( jq -r  '.caller.descriptor' <<< "${callChainLinkAsJson}" )            
+                    innerCallChain="<tr $tableBorders><td>${{ parameters.Starting_At_Name }}: </td><td $boldContent>$caller</td></tr>"
+                  fi              
+                  innerCallChain="$innerCallChain<tr $tableBorders><td>${{ parameters.Calling_Name }}: </td> <td $boldContent>$callee</td></tr> <tr $tableBorders><td $tableContent>${{ parameters.At_Line_Name }} "$( jq -r  '.lineNumber' <<< "${callChainLinkAsJson}" )"</td></tr>"
+                done
+                callChain=$callChain$innerCallChain"</table>"
+                let "callNumber++"
               done
-              callChain=$callChain$innerCallChain"</table>"
-              let "callNumber++"
-            done
 
-            callChain=$callChain"</ul>"
+              callChain=$callChain"</ul>"
 
-            calls[$callIndex]=$callChain
-            let "callIndex++"
-          done      
-          vulnerableMethods[$methodIndex]="$ref$splitter${calls[@]}"
+              calls[$callIndex]=$callChain
+              let "callIndex++"
+            done      
+            vulnerableMethods[$methodIndex]="$ref$splitter${calls[@]}"
 
-          let "methodIndex++"
-        done
+            let "methodIndex++"
+          done
+        fi
 
         for encodedVulnerability in $(echo "${VULNERABILITIES_AS_JSON}" | jq -r '.[] | @base64'); do
           vulnerabilityAsJson=$(echo "$encodedVulnerability" | base64 --decode)
